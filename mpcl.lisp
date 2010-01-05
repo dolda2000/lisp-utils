@@ -192,7 +192,19 @@
 				 :message "Invalid response from mpd: ~A"
 				 :inputs (list line))))))))
 
-(defun connect (&key (host "localhost") (port 6600))
+(defun default-host ()
+  (block nil
+    #+sbcl (let ((host (sb-posix:getenv "MPD_HOST")))
+	     (when host (return host)))
+    "localhost"))
+
+(defun default-port ()
+  (block nil
+    #+sbcl (let ((port (sb-posix:getenv "MPD_PORT")))
+	     (when port (return (parse-integer port))))
+    6600))
+
+(defun connect (&key (host (default-host)) (port (default-port)))
   "Connect to a running MPD."
   (disconnect)
   (with-conn-lock
