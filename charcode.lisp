@@ -3,7 +3,7 @@
 
 (defpackage :charcode
   (:use :cl #+sbcl :sb-gray #-sbcl :gray)
-  (:export "MAKE-ENCODER" "MAKE-DECODER" "ENCODE-STRING" "DECODE-STRING"
+  (:export "MAKE-ENCODER" "MAKE-DECODER" "ENCODE-STRING" "DECODE-STRING" "SYSTEM-CHARSET"
 	   "CODING-ERROR"
 	   "MAKE-CODEC-CHARACTER-STREAM"
 	   "LATIN-1" "LATIN1" "UTF-8" "UTF8"))
@@ -51,7 +51,11 @@
 (defun make-decoder (name)
   (the decoder-fun (values (funcall (get name 'make-decoder)))))
 
-(defun encode-string (string coding)
+(defun system-charset ()
+  ;; XXX: Replace me with something perhaps more sensible.
+  'utf-8)
+
+(defun encode-string (string &optional (coding (system-charset)))
   (declare (type string string))
   (let ((encoder (make-encoder coding))
 	(buf (make-array (list (length string)) :element-type '(unsigned-byte 8) :adjustable t :fill-pointer 0)))
@@ -59,7 +63,7 @@
       (coding-error string (length string) buf "Encoding of string in ~A ended prematurely." coding))
     buf))
 
-(defun decode-string (buffer coding)
+(defun decode-string (buffer &optional (coding (system-charset)))
   (declare (type (array (unsigned-byte 8)) buffer))
   (let ((decoder (make-decoder coding))
 	(buf (make-array (list (length buffer)) :element-type 'character :adjustable t :fill-pointer 0)))
@@ -76,7 +80,7 @@
    (read-pos :initform 0)
    (buffer :initform (make-array '(64) :element-type 'character :adjustable t :fill-pointer 0))))
 
-(defun make-codec-character-stream (real-stream charset)
+(defun make-codec-character-stream (real-stream &optional (charset (system-charset)))
   (declare (type stream real-stream))
   (make-instance 'codec-character-stream :decoder (make-decoder charset) :encoder (make-encoder charset) :back real-stream))
 
