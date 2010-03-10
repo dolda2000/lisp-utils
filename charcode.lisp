@@ -6,7 +6,7 @@
   (:export "MAKE-ENCODER" "MAKE-DECODER" "ENCODE-STRING" "DECODE-STRING" "SYSTEM-CHARSET"
 	   "CODING-ERROR"
 	   "MAKE-CODEC-CHARACTER-STREAM"
-	   "LATIN-1" "LATIN1" "UTF-8" "UTF8"))
+	   "ASCII" "LATIN-1" "LATIN1" "UTF-8" "UTF8"))
 (in-package :charcode)
 
 ;;; General stuff
@@ -194,6 +194,53 @@
 (defun char->unicode (char)
   (declare (type character char))
   (char-code char))
+
+;;; ASCII
+
+(defun decode-ascii (byteseq charseq &key (start 0) (end (length byteseq)))
+  (declare (type (array (unsigned-byte 8)) byteseq)
+	   (type (array character) charseq)
+	   (type fixnum start end))
+  (loop
+     (restart-case
+	 (loop
+	    (unless (< start end) (return-from decode-ascii t))
+	    (let ((byte (aref byteseq (prog1 start (incf start)))))
+	      (unless (< byte 128)
+		(coding-error byteseq start charseq "Invalid byte ~D in ASCII stream." byte))
+	      (vector-push-extend (unicode->char byte) charseq)))
+       (:replace-char (&optional (replacement (unicode->char #xfffd)))
+	 :report "Replace the invalid byte with a character."
+	 (vector-push-extend replacement charseq))
+       (:skip-char ()
+	 :report "Ignore the invalid byte."
+	 nil))))
+
+(defun encode-ascii (charseq byteseq &key (start 0) (end (length charseq)))
+  (declare (type (array (unsigned-byte 8)) byteseq)
+	   (type (array character) charseq)
+	   (type fixnum start end))
+  (loop
+     (restart-case
+	 (loop
+	    (unless (< start end) (return-from encode-ascii t))
+	    (vector-push-extend (let ((cp (char->unicode (aref charseq (prog1 start (incf start))))))
+				  (unless (< cp 128)
+				    (coding-error charseq start byteseq "ASCII cannot encode code-points higher than 128."))
+				  cp)
+				byteseq))
+       (:replace-char (&optional (replacement #\?))
+	 :report "Replace this character with another."
+	 (vector-push-extend (char->unicode replacement) byteseq))
+       (:skip-char ()
+	 :report "Ignore this character."
+	 nil))))
+
+(define-decoder (ascii)
+  #'decode-ascii)
+
+(define-encoder (ascii)
+  #'encode-ascii)
 
 ;;; Latin-1
 
