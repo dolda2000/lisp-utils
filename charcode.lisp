@@ -5,6 +5,7 @@
   (:use :cl #+sbcl :sb-gray #-sbcl :gray)
   (:export "MAKE-ENCODER" "MAKE-DECODER" "ENCODE-STRING" "DECODE-STRING"
 	   "CODING-ERROR"
+	   "MAKE-CODEC-CHARACTER-STREAM"
 	   "LATIN-1" "LATIN1" "UTF-8" "UTF8"))
 (in-package :charcode)
 
@@ -74,6 +75,10 @@
    (back :initarg :back)
    (read-pos :initform 0)
    (buffer :initform (make-array '(64) :element-type 'character :adjustable t :fill-pointer 0))))
+
+(defun make-codec-character-stream (real-stream charset)
+  (declare (type stream real-stream))
+  (make-instance 'codec-character-stream :decoder (make-decoder charset) :encoder (make-encoder charset) :back real-stream))
 
 (defmethod close ((stream codec-character-stream) &key abort)
   (with-slots (back) stream
