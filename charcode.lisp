@@ -241,6 +241,8 @@
 (define-encoder (ascii)
   #'encode-ascii)
 
+(define-codec-synonyms ascii :ascii)
+
 ;;; Latin-1
 
 (defun decode-latin-1 (byteseq charseq &key (start 0) (end (length byteseq)))
@@ -278,7 +280,7 @@
 (define-encoder (latin-1)
   #'encode-latin-1)
 
-(define-codec-synonyms latin-1 latin1 iso-8859-1)
+(define-codec-synonyms latin-1 latin1 iso-8859-1 :latin-1 :latin1 :iso-8859-1)
 
 ;;; UTF-8
 
@@ -362,4 +364,4 @@
 			(setf mlen 0))))))))
       #'decode)))
 
-(define-codec-synonyms utf-8 utf8)
+(define-codec-synonyms utf-8 utf8 :utf-8 :utf8)
