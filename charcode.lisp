@@ -4,12 +4,18 @@
 (defpackage :charcode
   (:use :cl #+sbcl :sb-gray #-sbcl :gray)
   (:export "MAKE-ENCODER" "MAKE-DECODER" "ENCODE-STRING" "DECODE-STRING" "SYSTEM-CHARSET"
-	   "CODING-ERROR"
+	   "NO-CODEC-ERROR" "CODING-ERROR"
 	   "MAKE-CODEC-CHARACTER-STREAM"
 	   "ASCII" "LATIN-1" "LATIN1" "UTF-8" "UTF8"))
 (in-package :charcode)
 
 ;;; General stuff
+
+(define-condition no-codec-error (error)
+  ((codec-name :initarg :codec-name))
+  (:report (lambda (c s)
+	     (with-slots (codec-name) c
+	       (format s "Could find no codec named ~A." codec-name)))))
 
 (define-condition coding-error (error)
   ((input :initarg :input)
@@ -46,10 +52,12 @@
 	       synonyms)))
 
 (defun make-encoder (name)
-  (the encoder-fun (values (funcall (get name 'make-encoder)))))
+  (the encoder-fun (values (funcall (or (get name 'make-encoder)
+					(error 'no-codec-error :codec-name name))))))
 
 (defun make-decoder (name)
-  (the decoder-fun (values (funcall (get name 'make-decoder)))))
+  (the decoder-fun (values (funcall (or (get name 'make-decoder)
+					(error 'no-codec-error :codec-name name))))))
 
 (defun system-charset ()
   ;; XXX: Replace me with something perhaps more sensible.
