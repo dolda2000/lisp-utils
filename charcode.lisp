@@ -99,7 +99,7 @@
   (with-slots (decoder back buffer read-pos) stream
     (let ((readbuf (make-array (list len) :element-type '(unsigned-byte 8))))
       (loop (unless (< (- (length buffer) read-pos) len) (return t))
-	 (let ((readlen (read-sequence readbuf back)))
+	 (let ((readlen (read-sequence readbuf back :end (- len (- (length buffer) read-pos)))))
 	   (when (= readlen 0)
 	     (return-from ccs-ensure-buffer nil))
 	   (funcall decoder readbuf buffer :end readlen))))))
@@ -108,8 +108,8 @@
   (declare (type codec-character-stream stream))
   (with-slots (read-pos buffer) stream
     (replace buffer buffer :start2 read-pos)
-	(setf (fill-pointer buffer) (- (fill-pointer buffer) read-pos)
-	      read-pos 0)))
+    (setf (fill-pointer buffer) (- (fill-pointer buffer) read-pos)
+	  read-pos 0)))
 
 (defmethod stream-read-char ((stream codec-character-stream))
   (unless (ccs-ensure-buffer stream 1)
@@ -127,8 +127,7 @@
 	  (adjust-array buffer (list (setf (fill-pointer buffer)
 					   (+ len 16)))))
 	(replace buffer buffer :start1 16 :end2 len)))
-    (setf (aref buffer read-pos) char)
-    (decf read-pos)
+    (setf (aref buffer (decf read-pos)) char)
     nil))
 
 (defun ccs-wont-hang-p (stream)
