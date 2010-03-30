@@ -2,7 +2,7 @@
 ;;;; representations thereof
 
 (defpackage :charcode
-  (:use :cl #+sbcl :sb-gray #-sbcl :gray)
+  (:use :cl)
   (:export "MAKE-ENCODER" "MAKE-DECODER" "ENCODE-STRING" "DECODE-STRING" "SYSTEM-CHARSET"
 	   "NO-CODEC-ERROR" "CODING-ERROR"
 	   "MAKE-CODEC-CHARACTER-STREAM"
@@ -81,6 +81,10 @@
 
 ;;; Gray stream implementation
 
+;; Disabled for now. There doesn't seem to be any good way to get
+;; these working generally over various implementations.
+
+#+unused (
 (defclass codec-character-stream (fundamental-character-input-stream fundamental-character-output-stream)
   ((decoder :initarg :decoder)
    (encoder :initarg :encoder)
@@ -189,6 +193,7 @@
     (let ((outbuf (make-array (list (- end start)) :element-type '(unsigned-byte 8) :adjustable t :fill-pointer 0)))
       (funcall encoder seq outbuf)
       (write-sequence outbuf back))))
+)
 
 ;;; Implementation-specific functions
 
