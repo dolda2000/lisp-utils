@@ -207,6 +207,18 @@
   (declare (type character char))
   (char-code char))
 
+#+ecl
+(defun unicode->char (unicode)
+  (declare (type (unsigned-byte 24) unicode))
+  (when (>= unicode 256)
+    (error "ECL does not handle Unicode characters outside Latin-1."))
+  (code-char unicode))
+
+#+ecl
+(defun char->unicode (char)
+  (declare (type character char))
+  (char-code char))
+
 ;;; ASCII
 
 (defun decode-ascii (byteseq charseq &key (start 0) (end (length byteseq)))
