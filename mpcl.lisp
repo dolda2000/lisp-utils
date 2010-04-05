@@ -153,7 +153,9 @@
   "Disconnect from MPD."
   (with-conn-lock
     (let ((sk (prog1 *socket* (setf *socket* nil))))
-      (if sk (ignore-errors (close sk))))))
+      (when sk (handler-case
+		   (close sk)
+		 (error () (close sk :abort t)))))))
 
 (defun connection-error (condition-type &rest condition-args)
   (disconnect)
