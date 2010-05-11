@@ -9,8 +9,6 @@
 
 ;;; General declarations
 
-(defvar *parseable-formats* '())
-
 (defclass address () ())
 
 (defclass host-address (address) ())
@@ -58,25 +56,6 @@
 	  (values nil nil nil)
 	  (values (subseq buf 0 len) from to)))))
 
-(defun resolve-address (address)
-  (etypecase address
-    (address address)
-    (string
-     (dolist (fmt *parseable-formats*)
-       (handler-case (return (funcall (cdr fmt) address))
-	 (error ()
-	   nil))))))
-
-(defun define-parseable-address (name fun &optional (order '(:last)))
-  (if (symbolp order) (setf order (list order)))
-  (let ((newlist (remove-if #'(lambda (o) (eq (car o) name)) *parseable-formats*)))
-    (setf *parseable-formats*
-	  (ecase (car order)
-	    ((:first)
-	     (cons (cons name fun) newlist))
-	    ((:last)
-	     (append newlist `((,name . ,fun))))))))
-
 (defmethod print-object ((address address) stream)
   (if *print-escape*
       (format stream "#<~S ~A>" (class-name (class-of address)) (format-address address))
@@ -84,16 +63,10 @@
   address)
 
 (export '(address host-address inet-address inet-host-address
-	  format-address resolve-address
+	  format-address
 	  connect-to-address bind-to-address close-socket
 	  socket-local-address socket-remote-address
 	  accept socket-send socket-send-to socket-recv-into socket-recv))
-
-(defmethod connect-to-address ((target string) &key local)
-  (connect-to-address (resolve-address target) :local local))
-
-(defmethod bind-to-address ((address string))
-  (bind-to-address (resolve-address address)))
 
 (defmethod stream-socket-mode ((socket stream-socket))
   (slot-value socket 'mode))
@@ -369,8 +342,6 @@
 	(error "Too few octets in IPv4 address")
 	(make-instance 'ipv4-address :bytes buf))))
 
-(define-parseable-address 'ipv4-address #'parse-ipv4-address :first)
-
 (defmethod format-address ((address ipv4-address))
   (with-slots (bytes) address
     (format nil "~D.~D.~D.~D"
@@ -389,8 +360,6 @@
 (defun parse-ipv6-address (string)
   (declare (ignore string))
   (error "IPv6 parsing not implemented yet"))
-
-(define-parseable-address 'ipv6-address #'parse-ipv6-address :first)
 
 (export '(ipv6-address parse-ipv6-address))
 
@@ -425,8 +394,6 @@
   (multiple-value-bind (host port)
       (inet-resolve-colon-port address)
     (make-instance 'tcp-address :host host :port port)))
-
-(define-parseable-address 'tcp-service #'resolve-tcp-colon-port)
 
 (export '(tcp-address resolve-tcp-colon-port))
 
