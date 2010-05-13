@@ -246,7 +246,7 @@
   (declare (type stream-socket socket))
   (unless (eq (stream-socket-mode socket) :character)
     (error 'stream-mode-error :stream socket :socket socket :expected-mode :character))
-  (case (fill-char-buffer socket 1)
+  (case (fill-char-buffer socket 1 t)
     ((nil) (return-from gray-stream-read-char-no-hang :eof))
     ((:wait) (return-from gray-stream-read-char-no-hang nil)))
   (with-slots (char-buffer char-read-pos) socket
