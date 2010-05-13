@@ -10,14 +10,13 @@
 ;;; General declarations
 
 (defclass address () ())
-
 (defclass host-address (address) ())
 
 (defclass inet-address (address) ())
-
 (defclass inet-host-address (inet-address host-address) ())
 
 (defgeneric format-address (address))
+(defgeneric connected-address-p (address))
 (defgeneric connect-to-address (target &key local))
 (defgeneric bind-to-address (address))
 (defgeneric close-socket (socket))
@@ -62,6 +61,9 @@
       (princ (format-address address) stream))
   address)
 
+(defmethod connected-address-p ((address inet-host-address))
+  nil)
+
 (export '(address host-address inet-address inet-host-address
 	  format-address
 	  connect-to-address bind-to-address close-socket
@@ -103,17 +105,21 @@
 (define-condition socket-condition (condition)
   ((socket :initarg :socket :type socket)))
 
-(define-condition address-busy (error)
+(define-condition network-error (error) ())
+
+(define-condition socket-error (socket-condition network-error) ())
+
+(define-condition address-busy (network-error)
   ((address :initarg :address :type address))
   (:report (lambda (c s)
 	     (format s "The address ~A is busy." (format-address (slot-value c 'address))))))
 
-(define-condition connection-refused (error)
+(define-condition connection-refused (network-error)
   ((address :initarg :address :type address))
   (:report (lambda (c s)
 	     (format s "Connection to ~A was refused by the remote host." (format-address (slot-value c 'address))))))
 
-(define-condition socket-closed (error socket-condition) ()
+(define-condition socket-closed (socket-error) ()
   (:report (lambda (c s)
 	     (format s "The socket ~S is closed." (slot-value c 'socket)))))
 
@@ -121,14 +127,18 @@
   (:report (lambda (c s)
 	     (format s "The socket ~S has been closed from the other side." (slot-value c 'socket)))))
 
-(define-condition simple-socket-error (simple-error socket-condition) ())
+(define-condition simple-socket-error (simple-error socket-error) ())
 
 (defun simple-socket-error (socket format &rest args)
   (error 'simple-socket-error :socket socket :format-control format :format-arguments args))
 
+(export '(socket-condition network-error socket-error
+	  address-busy connection-refused
+	  socket-closed socket-disconnected simple-socket-error))
+
 ;;; Gray stream implementation for stream sockets
 
-(define-condition stream-mode-error (socket-condition stream-error error)
+(define-condition stream-mode-error (socket-error stream-error)
   ((expected-mode :initarg :expected-mode))
   (:report (lambda (c s)
 	     (with-slots (expected-mode socket) c
@@ -311,15 +321,12 @@
 
 ;;; IPv4 addresses
 
-(defclass ipv4-address (inet-host-address)
-  ((bytes :initarg :bytes :type (array (unsigned-byte 8) 4))))
+(defclass ipv4-address (inet-address)
+  ((host-bytes :type (array (unsigned-byte 8) 4))))
 
-(defun make-ipv4-address (o1 o2 o3 o4)
-  (make-instance 'ipv4-address :bytes (make-array '(4)
-						  :element-type '(unsigned-byte 8)
-						  :initial-contents (list o1 o2 o3 o4))))
+(defclass ipv4-host-address (ipv4-address inet-host-address) ())
 
-(defun parse-ipv4-address (string)
+(defun parse-dotted-quad (string)
   (let ((o 0)
 	(start 0)
 	(string (concatenate 'string string "."))
@@ -331,7 +338,7 @@
 		   (progn (setf (aref buf o) (let ((n (parse-integer string :start start :end i)))
 					       (if (and n (<= 0 n 255))
 						   n
-						   (error "IPv4 dottet-quad numbers must be octets"))))
+						   (error "IPv4 dotted-quad numbers must be octets"))))
 			  (setf start (1+ i))
 			  (incf o))
 		   (error "Too many octets in IPv4 address")))
@@ -340,82 +347,97 @@
 	      (t (error "Invalid character ~S in IPv4 address" ch)))))
     (if (< o 4)
 	(error "Too few octets in IPv4 address")
-	(make-instance 'ipv4-address :bytes buf))))
+	buf)))
+
+(defmethod initialize-instance :after ((instance ipv4-address) &key host-bytes host-string)
+  (let ((octets (or host-bytes
+		    (when host-string (parse-dotted-quad host-string))
+		    '(0 0 0 0))))
+    (assert (and (typep octets 'sequence)
+		 (= (length octets) 4)
+		 (every #'(lambda (o) (typep o '(unsigned-byte 8))) octets))
+	    (octets))
+    (setf (slot-value instance 'host-bytes)
+	  (make-array '(4)
+		      :element-type '(unsigned-byte 8)
+		      :initial-contents octets))))
+
+(defun parse-ipv4-host-address (string)
+  (make-instance 'ipv4-host-address :host-string string))
 
 (defmethod format-address ((address ipv4-address))
-  (with-slots (bytes) address
+  (with-slots (host-bytes) address
     (format nil "~D.~D.~D.~D"
-	    (aref bytes 0)
-	    (aref bytes 1)
-	    (aref bytes 2)
-	    (aref bytes 3))))
+	    (aref host-bytes 0)
+	    (aref host-bytes 1)
+	    (aref host-bytes 2)
+	    (aref host-bytes 3))))
 
 (export '(ipv4-address make-ipv4-address parse-ipv4-address))
 
 ;;; IPv6 addresses
 
-(defclass ipv6-address (inet-host-address)
-  ((bytes :initarg :bytes :type (array (unsigned-byte 8) 16))))
+(defclass ipv6-address (inet-address)
+  ((host-bytes :initarg :bytes :type (array (unsigned-byte 8) 16))))
 
-(defun parse-ipv6-address (string)
+(defclass ipv6-host-address (ipv6-address inet-host-address) ())
+
+(defun parse-ipv6-string (string)
   (declare (ignore string))
   (error "IPv6 parsing not implemented yet"))
+
+(defmethod initialize-instance :after ((instance ipv6-address) &key host-bytes host-string)
+  (let ((octets (or host-bytes
+		    (when host-string (parse-ipv6-string host-string))
+		    '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
+    (assert (and (typep octets 'sequence)
+		 (= (length octets) 16)
+		 (every #'(lambda (o) (typep o '(unsigned-byte 8))) octets))
+	    (octets))
+    (setf (slot-value instance 'host-bytes)
+	  (make-array '(16)
+		      :element-type '(unsigned-byte 8)
+		      :initial-contents octets))))
+
+(defun parse-ipv6-host-address (string)
+  (make-instance 'ipv6-host-address :host-string string))
 
 (export '(ipv6-address parse-ipv6-address))
 
 ;;; TCP code
 
 (defclass inet-port-address (inet-address)
-  ((host :initarg :host :type (or null inet-host-address))
-   (port :initarg :port :type (unsigned-byte 16))))
+  ((port :initarg :port :type (unsigned-byte 16))))
+
+(defmethod format-address ((address inet-port-address))
+  (with-slots (port) address
+    (format nil "~A:~D" (call-next-method) port)))
 
 (defclass tcp-address (inet-port-address) ())
+(defclass tcp4-address (tcp-address ipv4-address) ())
+(defclass tcp6-address (tcp-address ipv6-address) ())
 
-(defmethod format-address ((address tcp-address))
-  (with-slots (host port) address
-    (format nil "~A:~D" (if host (format-address host) "*") port)))
+(defmethod connected-address-p ((address tcp-address)) t)
 
-(defun inet-resolve-colon-port (string)
-  (let ((colon (position #\: string)))
-    (if (null colon)
-	(error "No colon in TCP address"))
-    (if (find #\: string :start (1+ colon))
-	(error "More than one colon in TCP address"))
-    (let ((port (parse-integer (subseq string (1+ colon))))
-	  (host (let ((host-part (subseq string 0 colon)))
-		  (if (equal host-part "*")
-		      nil
-		      (resolve-address host-part)))))
-      (if (not (typep host '(or null inet-host-address)))
-	  (error "Must have an internet address for TCP connections"))
-      (values host port))))
-
-(defun resolve-tcp-colon-port (address)
-  (multiple-value-bind (host port)
-      (inet-resolve-colon-port address)
-    (make-instance 'tcp-address :host host :port port)))
-
-(export '(tcp-address resolve-tcp-colon-port))
+(export '(tcp-address tcp4-address tcp6-address))
 
 ;;; UDP code
 
 (defclass udp-address (inet-port-address) ())
+(defclass udp4-address (udp-address ipv4-address) ())
+(defclass udp6-address (udp-address ipv6-address) ())
 
-(defmethod format-address ((address udp-address))
-  (with-slots (host port) address
-    (format nil "~A:~D" (if host (format-address host) "*") port)))
+(defmethod connected-address-p ((address tcp-address)) nil)
 
-(defun resolve-udp-colon-port (address)
-  (multiple-value-bind (host port)
-      (inet-resolve-colon-port address)
-    (make-instance 'udp-address :host host :port port)))
-
-(export '(udp-address resolve-udp-colon-port))
+(export '(udp-address udp4-address udp6-address))
 
 ;;; Unix sockets
 
 (defclass local-address (address)
-  ((path :initarg :path :type pathname)))
+  ((path :type pathname)))
+
+(defmethod initialize-instance :after ((instance local-address) &key path)
+  (setf (slot-value instance 'path) (pathname path)))
 
 (defmethod format-address ((address local-address))
   (namestring (slot-value address 'path)))
@@ -424,11 +446,8 @@
 (defclass local-seq-address (local-address) ())
 (defclass local-datagram-address (local-address) ())
 
-(defun make-local-address (pathspec &optional (type :stream))
-  (make-instance (ecase type
-		   ((:stream) 'local-stream-address)
-		   ((:seq) 'local-seq-address)
-		   ((:datagram) 'local-datagram-address))
-		 :path (pathname pathspec)))
+(defmethod connected-address-p ((address local-stream-address)) t)
+(defmethod connected-address-p ((address local-seq-address)) t)
+(defmethod connected-address-p ((address local-datagram-address)) nil)
 
-(export '(local-address make-local-address))
+(export '(local-address local-stream-address local-seq-address local-datagram-address))

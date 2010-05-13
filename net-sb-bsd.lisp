@@ -23,54 +23,44 @@
      (let ((host (first address))
 	   (port (second address)))
        (make-instance (ecase (sb-bsd-sockets:socket-type sk)
-			((:stream) 'tcp-address)
-			((:datagram) 'udp-address))
-		      :host (if (every #'zerop host)
-				nil
-				(make-instance 'ipv4-address :bytes host))
-		      :port port)))))
+			((:stream) 'tcp4-address)
+			((:datagram) 'udp4-address))
+		      :host-bytes host
+		      :port port)))
+    (sb-bsd-sockets:local-socket
+     (make-instance (ecase (sb-bsd-sockets:socket-type sk)
+		      ((:stream) 'local-stream-address)
+		      ((:datagram 'local-datagram-address)))
+		    :path (first address)))))
 
 (defun map-address-to-sbcl (sk address)
   (etypecase sk
     (sb-bsd-sockets:inet-socket
      (etypecase address
-       (inet-port-address
-	(with-slots (host port) address
-	  (list (etypecase host
-		  (null #(0 0 0 0))
-		  (ipv4-address (slot-value host 'bytes)))
-		port)))))
+       ((and ipv4-address inet-port-address)
+	(with-slots (host-bytes port) address
+	  (list host-bytes port)))))
     (sb-bsd-sockets:local-socket
      (etypecase address
        (local-address
-	(namestring (slot-value address 'path)))))))
+	(list (namestring (slot-value address 'path))))))))
 
 (defun sbcl-socket-type-and-args (address)
   (etypecase address
-    (inet-port-address
-     (let ((type (etypecase address
-		   (tcp-address :stream)
-		   (udp-address :datagram))))
-       (with-slots (host port) address
-	 (etypecase host
-	   (null
-	    ;; This should probably be changed to use IPv6 when SBCL
-	    ;; supports it. At least on Linux, since it supports
-	    ;; v4-mapping, but it is less clear what to do on the
-	    ;; BSDs.
-	    (list 'sb-bsd-sockets:inet-socket :type type))
-	   (ipv4-address
-	    (list 'sb-bsd-sockets:inet-socket :type type))
-	   (ipv6-address
-	    (error "SBCL does not support IPv6."))))))
+    (tcp4-address
+     '(sb-bsd-sockets:inet-socket :type :stream))
+    (udp4-address
+     '(sb-bsd-sockets:inet-socket :type :datagram))
+    (ipv6-address
+     (error "SBCL does not support IPv6."))
     (inet-host-address
      (error "SBCL does not support raw sockets."))
     (local-stream-address
-     (list 'sb-bsd-sockets:local-socket :type :stream))
+     '(sb-bsd-sockets:local-socket :type :stream))
     (local-seq-address
      (error "SBCL does not support Unix seqpacket sockets."))
     (local-datagram-address
-     (list 'sb-bsd-sockets:local-socket :type :datagram))))
+     '(sb-bsd-sockets:local-socket :type :datagram))))
 
 (defun sb-bsd-socket-for-address (address)
   (apply #'make-instance (sbcl-socket-type-and-args address)))
@@ -79,6 +69,15 @@
   (declare (type sbcl-socket socket))
   (when (null (slot-value socket 'sb-socket))
     (error 'socket-closed :socket socket)))
+
+(defgeneric socket-class-for-address (address mode))
+(defmethod socket-class-for-address ((address tcp-address) (mode (eql :connect))) 'sbcl-stream-socket)
+(defmethod socket-class-for-address ((address tcp-address) (mode (eql :bind))) 'sbcl-listen-socket)
+(defmethod socket-class-for-address ((address udp-address) mode) 'sbcl-datagram-socket)
+(defmethod socket-class-for-address ((address inet-host-address) mode) 'sbcl-datagram-socket)
+(defmethod socket-class-for-address ((address local-stream-address) mode) 'sbcl-stream-socket)
+(defmethod socket-class-for-address ((address local-seq-address) mode) 'sbcl-datagram-socket)
+(defmethod socket-class-for-address ((address local-datagram-address) mode) 'sbcl-datagram-socket)
 
 (define-condition wrapped-socket-error (error socket-condition)
   ((cause :initarg :cause))
@@ -98,7 +97,7 @@
        ,@body)))
 
 (defmacro retry-loop ((format-string &rest format-args) &body body)
-  `(loop (with-simple-restart (retry ,format-string ,@format-args)
+  `(loop (with-simple-restart (:retry ,format-string ,@format-args)
 	   (return ,@body))))
 
 (defmethod close-socket ((socket sbcl-socket))
@@ -177,8 +176,8 @@
 	 (replace buf readbuf :start1 start :end2 len))
        (values len (map-sbcl-to-address (slot-value socket 'sb-socket) addr-list))))))
 
-(defmethod bind-to-address ((address tcp-address))
-  (make-instance 'sbcl-listen-socket
+(defmethod bind-to-address ((address address))
+  (make-instance (socket-class-for-address address :bind)
 		 :sb-socket (with-sb-socket (sk (sb-bsd-socket-for-address address))
 			      (handler-bind
 				  ((sb-bsd-sockets:address-in-use-error (lambda (c)
@@ -186,47 +185,26 @@
 									  (error 'address-busy :address address))))
 				(retry-loop ("Try binding again.")
 				  (apply #'sb-bsd-sockets:socket-bind sk (map-address-to-sbcl sk address))))
-			      (sb-bsd-sockets:socket-listen sk 64)
+			      (when (connected-address-p address)
+				(sb-bsd-sockets:socket-listen sk 64))
 			      sk)))
 
-(defmethod connect-to-address ((remote tcp-address) &key local)
-  (typecase local
-    (string (setf local (resolve-address local))))
-  (make-instance 'sbcl-stream-socket
+(defmethod connect-to-address ((remote address) &key local)
+  (make-instance (socket-class-for-address remote :connect)
 		 :sb-socket (with-sb-socket (sk (sb-bsd-socket-for-address (if local local remote)))
-			      (if local
-				  (handler-case
-				      (apply #'sb-bsd-sockets:socket-bind sk (map-address-to-sbcl sk local))
-				    (sb-bsd-sockets:address-in-use-error ()
-				      (error 'address-busy :address local))))
-			      (retry-loop ("Retry connection.")
+			      (when local
 				(handler-bind
-				    ((sb-bsd-sockets:connection-refused-error (lambda (c)
-										(declare (ignore c))
-										(error 'connection-refused :address remote))))
+				    ((sb-bsd-sockets:address-in-use-error (lambda (c)
+									    (declare (ignore c))
+									    (error 'address-busy :address local))))
+				  (retry-loop ("Try binding again.")
+				    (apply #'sb-bsd-sockets:socket-bind sk (map-address-to-sbcl sk local)))))
+			      (handler-bind
+				  ((sb-bsd-sockets:connection-refused-error (lambda (c)
+									      (declare (ignore c))
+									      (error 'connection-refused :address remote))))
+				(retry-loop ("Retry connection.")
 				  (apply #'sb-bsd-sockets:socket-connect sk (map-address-to-sbcl sk remote))))
-			      sk)))
-
-(defmethod bind-to-address ((address udp-address))
-  (make-instance 'sbcl-datagram-socket
-		 :sb-socket (with-sb-socket (sk (sb-bsd-socket-for-address address))
-			      (handler-case
-				  (apply #'sb-bsd-sockets:socket-bind sk (map-address-to-sbcl sk address))
-				(sb-bsd-sockets:address-in-use-error ()
-				  (error 'address-busy :address address)))
-			      sk)))
-
-(defmethod connect-to-address ((remote udp-address) &key local)
-  (typecase local
-    (string (setf local (resolve-address local))))
-  (make-instance 'sbcl-datagram-socket
-		 :sb-socket (with-sb-socket (sk (sb-bsd-socket-for-address (if local local remote)))
-			      (if local
-				  (handler-case
-				      (apply #'sb-bsd-sockets:socket-bind sk (map-address-to-sbcl sk local))
-				    (sb-bsd-sockets:address-in-use-error ()
-				      (error 'address-busy :address local))))
-			      (apply #'sb-bsd-sockets:socket-connect sk (map-address-to-sbcl sk remote))
 			      sk)))
 
 (defmethod accept ((socket sbcl-listen-socket))
