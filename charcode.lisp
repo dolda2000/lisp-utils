@@ -197,12 +197,12 @@
 
 ;;; Implementation-specific functions
 
-#+(or (and clisp unicode) sbcl)
+#+(or (and clisp unicode) sbcl abcl)
 (defun unicode->char (unicode)
   (declare (type (unsigned-byte 24) unicode))
   (code-char unicode))
 
-#+(or (and clisp unicode) sbcl)
+#+(or (and clisp unicode) sbcl abcl)
 (defun char->unicode (char)
   (declare (type character char))
   (char-code char))
