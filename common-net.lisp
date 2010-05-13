@@ -349,8 +349,11 @@
 	(error "Too few octets in IPv4 address")
 	buf)))
 
-(defmethod initialize-instance :after ((instance ipv4-address) &key host-bytes host-string)
+(defmethod initialize-instance :after ((instance ipv4-address) &key host-bytes host-string host-address)
   (let ((octets (or host-bytes
+		    (when host-address
+		      (check-type host-address ipv4-address)
+		      (slot-value host-address 'host-bytes))
 		    (when host-string (parse-dotted-quad host-string))
 		    '(0 0 0 0))))
     (assert (and (typep octets 'sequence)
@@ -373,7 +376,9 @@
 	    (aref host-bytes 2)
 	    (aref host-bytes 3))))
 
-(export '(ipv4-address make-ipv4-address parse-ipv4-address))
+(defparameter *ipv4-localhost* (make-instance 'ipv4-host-address :host-bytes '(127 0 0 1)))
+
+(export '(ipv4-address ipv4-host-address make-ipv4-address parse-ipv4-address *ipv4-localhost*))
 
 ;;; IPv6 addresses
 
@@ -386,8 +391,11 @@
   (declare (ignore string))
   (error "IPv6 parsing not implemented yet"))
 
-(defmethod initialize-instance :after ((instance ipv6-address) &key host-bytes host-string)
+(defmethod initialize-instance :after ((instance ipv6-address) &key host-bytes host-string host-address)
   (let ((octets (or host-bytes
+		    (when host-address
+		      (check-type host-address ipv6-address)
+		      (slot-value host-address 'host-bytes))
 		    (when host-string (parse-ipv6-string host-string))
 		    '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0))))
     (assert (and (typep octets 'sequence)
@@ -402,7 +410,9 @@
 (defun parse-ipv6-host-address (string)
   (make-instance 'ipv6-host-address :host-string string))
 
-(export '(ipv6-address parse-ipv6-address))
+(defparameter *ipv6-localhost* (make-instance 'ipv6-host-address :host-bytes '(0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 1)))
+
+(export '(ipv6-address ipv6-host-address parse-ipv6-address *ipv6-localhost*))
 
 ;;; TCP code
 
