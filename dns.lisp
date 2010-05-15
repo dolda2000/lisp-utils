@@ -110,38 +110,39 @@
 	   (* (aref packet (+ pos 1)) #x10000)
 	   (* (aref packet (+ pos 2)) #x100)
 	   (aref packet (+ pos 3)))
-      (incf pos 2))))
+      (incf pos 4))))
 
 (defun decode-domain-name (buf)
   (declare (type dns-decode-state buf))
-  (let* ((orig-off (dns-decode-state-pos buf))
-	 (decoded (block decoded
-		    (let ((l '()))
-		      (loop (let ((len (decode-uint-8 buf)))
-			      (case (ldb (byte 2 6) len)
-				((0)
-				 (when (zerop len)
-				   (return-from decoded l))
-				 (with-slots (packet pos) buf
-				   (setf l (append l (list (handler-bind
-							       ((charcode:coding-error
-								 (lambda (c)
-								   (declare (ignore c))
-								   (simple-dns-decode-error buf "DNS label was not ASCII."))))
-							     (charcode:decode-string (subseq packet
-											     pos (+ pos len))
-										     :ascii)))))
-				   (incf pos len)))
-				((3) (return-from decoded
-				       (let* ((offset (+ (* 256 (ldb (byte 0 6) len))
-							 (decode-uint-8 buf)))
-					      (prev (assoc offset (dns-decode-state-prev-names buf))))
-					 (unless prev
-					   (simple-dns-decode-error buf "Domain name label pointed to non-label position"))
-					 (append l (cdr prev)))))
-				(t (simple-dns-decode-error buf "Illegal DNS label flags: ~D" (ldb (byte 2 6) len))))))))))
-    (push (cons orig-off decoded)
-	  (slot-value buf 'prev-names))))
+  (labels ((decode-label ()
+	     (let* ((orig-off (dns-decode-state-pos buf))
+		    (len (decode-uint-8 buf)))
+	       (case (ldb (byte 2 6) len)
+		 ((0)
+		  (if (zerop len)
+		      '()
+		      (with-slots (packet pos) buf
+			(let* ((label (prog1
+					  (handler-bind
+					      ((charcode:coding-error
+						(lambda (c)
+						  (declare (ignore c))
+						  (simple-dns-decode-error buf "DNS label was not ASCII."))))
+					    (charcode:decode-string (subseq packet
+									    pos (+ pos len))
+								    :ascii))
+					(incf pos len)))
+			       (decoded (append (list label) (decode-label))))
+			  (push (cons orig-off decoded) (slot-value buf 'prev-names))
+			  decoded))))
+		 ((3) (let* ((offset (+ (* 256 (ldb (byte 0 6) len))
+					(decode-uint-8 buf)))
+			     (prev (assoc offset (dns-decode-state-prev-names buf))))
+			(unless prev
+			  (simple-dns-decode-error buf "Domain name label pointed to non-label position."))
+			(cdr prev)))
+		 (t (simple-dns-decode-error buf "Illegal DNS label flags: ~D" (ldb (byte 2 6) len)))))))
+    (decode-label)))
 
 (defun decode-dns-query (buf)
   (declare (type dns-decode-state buf))
