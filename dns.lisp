@@ -380,3 +380,34 @@
   (let ((buf (make-dns-encode-state)))
     (encode-dns-packet buf packet)
     (slot-value buf 'packet-buf)))
+
+;;; DN format
+
+(defun parse-domain-name (name)
+  (declare (type string name))
+  (let ((l '())
+	(p 0))
+    (loop (let ((p2 (position #\. name :start p)))
+	    (if p2
+		(if (= p2 (1- (length name)))
+		    (return (values l t))
+		    (setf l (append l (list (subseq name p p2)))
+			  p (1+ p2)))
+		(return (values (append l (list (subseq name p))) nil)))))))
+
+(defun unparse-domain-name (name)
+  (declare (type list name))
+  (let ((buf nil))
+    (dolist (label name buf)
+      (setf buf (if buf
+		    (concatenate 'string buf "." label)
+		    label)))))
+
+;;; Misc.
+
+(defmethod print-object ((q resource-query) stream)
+  (with-slots (name type) q
+    (if *print-readably*
+	(format stream "~A: ~A" type (unparse-domain-name name))
+	(format stream "#<~S ~S ~S>" 'resource-query type (unparse-domain-name name)))))
+
