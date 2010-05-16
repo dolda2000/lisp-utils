@@ -403,6 +403,33 @@
 		    (concatenate 'string buf "." label)
 		    label)))))
 
+;;; Basic communication
+
+(defun dns-do-request (server packet)
+  (declare (type address server)
+	   (type dns-packet packet))
+  (with-connection (sk server)
+    (socket-send sk (dns-encode packet))
+    (loop
+       (let ((resp (dns-decode (socket-recv sk))))
+	 (when (= (dns-packet-txid resp)
+		(dns-packet-txid packet))
+	   (return resp))))))
+
+(defun dns-std-request (queries &key (txid (random 65536)) (recurse t))
+  (let ((qlist (map 'list #'(lambda (o)
+			      (let ((name (first o))
+				    (type (second o)))
+				(make-instance 'resource-query
+					       :name (etypecase name
+						       (string (parse-domain-name name))
+						       (list name))
+					       :type type)))
+		    queries)))
+    (make-dns-packet :txid txid
+		     :recurse recurse
+		     :queries qlist)))
+
 ;;; Misc.
 
 (defmethod print-object ((q resource-query) stream)
