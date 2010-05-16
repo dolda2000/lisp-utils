@@ -33,7 +33,9 @@
 				      (car slot))
 				   (cdr slot)))
 			slots))
-	(slot-desc (mapcar #'car slots)))
+	(slot-desc (mapcar #'(lambda (slot)
+			       (let ((name (car slot)))
+				 `(,name :initarg ,(intern (symbol-name name) (find-package :keyword))))) slots)))
     `(progn
        (defclass ,name (resource-record) ,slot-desc)
        (setf *rr-coding-types* (cons '(,name (,class ,type) ,format)
@@ -429,6 +431,110 @@
     (make-dns-packet :txid txid
 		     :recurse recurse
 		     :queries qlist)))
+
+;;; RR caching
+
+(defstruct domain-cache-entry
+  (time (get-internal-real-time) :type unsigned-byte)
+  (records '() :type list))
+
+(defun domain-cache-get-entry (cache name type &optional create)
+  (let* ((key (list name (etypecase type
+			   (symbol type)
+			   (resource-record (class-name (class-of type))))))
+	 (cur (gethash key cache)))
+    (block no-expire
+      (when (and cur (domain-cache-entry-records cur)
+		 (> (get-internal-real-time)
+		    (+ (domain-cache-entry-time cur)
+		       (apply 'min (mapcar #'(lambda (o)
+					       (declare (type resource-record o))
+					       (with-slots (ttl) o
+						 (unless ttl (return-from no-expire))
+						 ttl))
+					   (domain-cache-entry-records cur))))))
+	(remhash key cache)
+	(setf cur nil)))
+    (cond (cur cur)
+	  (create
+	   (setf (gethash key cache) (make-domain-cache-entry))))))
+
+(defun domain-cache-put (cache record)
+  (with-slots (name ttl) record
+    (let ((entry (domain-cache-get-entry cache name record t)))
+      (push record (domain-cache-entry-records entry)))))
+
+(defun make-domain-cache ()
+  (let ((table (make-hash-table :test 'equal)))
+    (dolist (server (labels ((ipv4 (address)
+			       (make-instance 'ipv4-host-address :host-string address)))
+		      `(("a.root-servers.net" ,(ipv4 "198.41.0.4"))
+			("b.root-servers.net" ,(ipv4 "192.228.79.201"))
+			("c.root-servers.net" ,(ipv4 "192.33.4.12"))
+			("d.root-servers.net" ,(ipv4 "128.8.10.90"))
+			("e.root-servers.net" ,(ipv4 "192.203.230.10"))
+			("f.root-servers.net" ,(ipv4 "192.5.5.241"))
+			("g.root-servers.net" ,(ipv4 "192.112.36.4"))
+			("h.root-servers.net" ,(ipv4 "128.63.2.53"))
+			("i.root-servers.net" ,(ipv4 "192.36.148.17"))
+			("j.root-servers.net" ,(ipv4 "192.58.128.30"))
+			("k.root-servers.net" ,(ipv4 "193.0.14.129"))
+			("l.root-servers.net" ,(ipv4 "199.7.83.42"))
+			("m.root-servers.net" ,(ipv4 "202.12.27.33")))))
+      (let ((parsed (parse-domain-name (first server))))
+	(domain-cache-put table (make-instance 'ns-record :name '() :ttl nil :ns-name parsed))
+	(dolist (address (cdr server))
+	  (domain-cache-put table (etypecase address
+				    (ipv4-host-address (make-instance 'a-record :name parsed :ttl nil :address address)))))))
+    table))
+
+;;; Resolver
+
+(defstruct resolver-config
+  (cache (make-domain-cache))
+  (default-domains '() :type list)
+  (help-servers '() :type list))
+
+(defun initialize-default-resolver ()
+  #+unix (with-open-file (s #p"/etc/resolv.conf" :if-does-not-exist nil)
+	   (when s
+	     (let ((cfg (make-resolver-config)))
+	       (labels ((whitespace-p (char)
+			  (declare (type character char))
+			  (or (char= char #\space)
+			      (char= char #\tab)))
+			(split-line (line)
+			  (let ((l '())
+				(p 0))
+			    (loop (let* ((p1 (or (position-if-not #'whitespace-p line :start p)
+						(return l)))
+					 (p2 (position-if #'whitespace-p line :start p1)))
+				    (if p2
+					(setf l (append l (list (subseq line p1 p2)))
+					      p p2)
+					(progn (setf l (append l (list (subseq line p1 p2))))
+					       (return l))))))))
+		 (let ((domain nil)
+		       (search '()))
+		   (loop (let ((line (read-line s nil nil)))
+			   (unless line (return))
+			   (let ((line (split-line line)))
+			     (when line
+			       (cond ((equal (car line) "nameserver")
+				      (push (make-instance 'ipv4-address :host-string (second line))
+					    (resolver-config-help-servers cfg)))
+				     ((equal (car line) "search")
+				      (setf search (append search (cdr line))))
+				     ((equal (car line) "domain")
+				      (setf domain (second line))))))))
+		   (setf (resolver-config-default-domains cfg)
+			 (or search (and domain (list domain)))))
+		 cfg))))
+  #-unix nil)
+
+(defvar *resolver-config* (initialize-default-resolver))
+
+
 
 ;;; Misc.
 
