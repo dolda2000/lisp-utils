@@ -585,6 +585,133 @@
 (defvar *dns-resolver-config* (initialize-default-resolver))
 
 (defgeneric dns-server-address-for-record (record))
+(defmethod dns-server-address-for-record ((record a-record))
+  (make-instance 'udp4-address
+		 :host-address (slot-value record 'address)
+		 :port 53))
+(defmethod dns-server-address-for-record ((record aaaa-record))
+  (make-instance 'udp6-address
+		 :host-address (slot-value record 'address)
+		 :port 53))
+
+(define-condition dns-resolver-condition (condition)
+  ((query-name :initarg :query-name)
+   (query-type :initarg :query-type)
+   (config :initarg :config)))
+
+(define-condition dns-resolver-error (dns-error dns-resolver-condition) ())
+(define-condition domain-not-found-error (dns-resolver-error) ()
+  (:report (lambda (c s)
+	     (with-slots (query-name) c
+	       (format s "No name servers found for domain name ~A." query-name)))))
+(define-condition dns-name-error (dns-error dns-resolver-condition) ()
+  (:report (lambda (c s)
+	     (with-slots (query-name) c
+	       (format s "The domain name ~A does not exist." query-name)))))
+
+(define-condition dns-resolver-querying (dns-resolver-condition)
+  ((server :initarg :server)))
+
+(define-condition dns-resolver-got-resp (dns-resolver-condition)
+  ((server :initarg :server)
+   (response :initarg :response)))
+
+(define-condition dns-resolver-help (dns-resolver-condition) ())
+(define-condition dns-resolver-recursing (dns-resolver-condition) ())
+
+(define-condition dns-resolver-following-cname (dns-resolver-condition)
+  ((cname-rr :initarg :cname-rr)))
+
+(defun dns-resolve-name (name types &key (require-all t) (config *dns-resolver-config*))
+  (let ((name (etypecase name
+		(list name)
+		(string (parse-domain-name name))))
+	(types (etypecase types
+		 (list types)
+		 (symbol (list types))))
+	(cache (resolver-config-cache config)))
+    (flet ((check-cache ()
+	     (let ((cn-entry (domain-cache-get-entry cache name 'cname-record)))
+	       (when (and cn-entry (domain-cache-entry-records cn-entry))
+		 (let ((record (car (domain-cache-entry-records cn-entry))))
+		   (signal 'dns-resolver-following-cname :cname-rr record
+			   :query-name (unparse-domain-name name) :query-type types
+			   :config config)
+		   (return-from dns-resolve-name
+		     (dns-resolve-name (slot-value record 'cname) types :config config)))))
+	     (block skip
+	       (let ((records '())
+		     (got-some nil))
+		 (dolist (type types)
+		   (let ((entry (domain-cache-get-entry cache name type)))
+		     (cond (entry
+			    (setf records (append records (domain-cache-entry-records entry))
+				  got-some t))
+			   (require-all
+			    (return-from skip)))))
+		 (when got-some
+		   (return-from dns-resolve-name (values records name))))))
+	   (nearest-known-servers (name)
+	     (labels ((check1 (name)
+			(let ((entry (domain-cache-get-entry cache name 'ns-record)))
+			  (cond ((and entry (domain-cache-entry-records entry))
+				 (values (domain-cache-entry-records entry) name))
+				(name (check1 (cdr name)))
+				(t (values '() name))))))
+	       (check1 name)))
+	   (do-request (server)
+	     (signal 'dns-resolver-querying :server server
+		     :query-name (unparse-domain-name name) :query-type types
+		     :config config)
+	     (handler-case
+		 (let ((resp (dns-do-request (udp-address-for server 53)
+					     (dns-std-request (mapcar #'(lambda (type)
+									  `(,name ,type))
+								      types)))))
+		   (signal 'dns-resolver-got-resp :server server :response resp
+			   :query-name (unparse-domain-name name) :query-type types
+			   :config config)
+		   (dns-cache-response cache resp)
+		   (with-slots (resp-code) resp
+		     (when (eq (dns-packet-resp-code resp) :name-error)
+		       (error 'dns-name-error :query-name (unparse-domain-name name) :query-type types
+			      :config config))
+		     (eq resp-code :success)))
+	       (name-server-timeout () nil))))
+      (check-cache)
+      (signal 'dns-resolver-help :query-name (unparse-domain-name name) :query-type types
+	      :config config)
+      (dolist (help-server (resolver-config-help-servers config))
+	(do-request help-server)
+	(check-cache))
+      (signal 'dns-resolver-recursing :query-name (unparse-domain-name name) :query-type types
+	      :config config)
+      (let ((checked-domains '()))
+	(loop (multiple-value-bind (servers domain)
+		  (nearest-known-servers name)
+		(unless servers
+		  (error 'domain-not-found-error :query-name (unparse-domain-name name) :query-type types
+			 :config config))
+		(if (find domain checked-domains :test 'equal)
+		    (error 'domain-not-found-error :query-name (unparse-domain-name name) :query-type types
+			   :config config)
+		    (push domain checked-domains))
+		(macrolet ((dolist-random ((var list) &body body)
+			     (let ((copy (gensym "COPY")))
+			       `(let ((,copy ,list))
+				  (loop (unless ,copy (return))
+				     (let ((,var (elt ,list (random (length ,list)))))
+				       (setf ,copy (remove ,var ,copy))
+				       ,@body))))))
+		  (block found-server
+		    (dolist-random (record servers)
+		      (let* ((server (slot-value record 'ns-name)))
+			(dolist-random (record (handler-case
+						   (dns-resolve-name server '(a-record aaaa-record) :require-all nil :config config)
+						 (dns-resolver-error () '())))
+			  (when (do-request (dns-server-address-for-record record))
+			    (return-from found-server))))))
+		  (check-cache))))))))
 
 ;;; Misc.
 
