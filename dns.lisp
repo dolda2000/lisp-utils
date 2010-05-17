@@ -407,6 +407,9 @@
 
 ;;; Basic communication
 
+(define-condition name-server-timeout (dns-error)
+  ((server :initarg :server)))
+
 (defun dns-do-request (server packet)
   (declare (type address server)
 	   (type dns-packet packet))
@@ -435,26 +438,28 @@
 ;;; RR caching
 
 (defstruct domain-cache-entry
-  (time (get-internal-real-time) :type unsigned-byte)
+  (expire nil :type (or number null))
   (records '() :type list))
 
+(defun domain-cache-key (name type)
+  (list name (etypecase type
+	       (symbol type)
+	       (resource-record (class-name (class-of type))))))
+
+(defun domain-cache-key-rr (record)
+  (declare (type resource-record record))
+  (list (slot-value record 'name) (class-name (class-of record))))
+
 (defun domain-cache-get-entry (cache name type &optional create)
-  (let* ((key (list name (etypecase type
-			   (symbol type)
-			   (resource-record (class-name (class-of type))))))
+  (let* ((key (domain-cache-key name type))
 	 (cur (gethash key cache)))
-    (block no-expire
-      (when (and cur (domain-cache-entry-records cur)
-		 (> (get-internal-real-time)
-		    (+ (domain-cache-entry-time cur)
-		       (apply 'min (mapcar #'(lambda (o)
-					       (declare (type resource-record o))
-					       (with-slots (ttl) o
-						 (unless ttl (return-from no-expire))
-						 ttl))
-					   (domain-cache-entry-records cur))))))
-	(remhash key cache)
-	(setf cur nil)))
+    (when (and cur (or (eq create :clear)
+		       (let ((expire (domain-cache-entry-expire cur)))
+			 (and expire
+			      (> (/ (get-internal-real-time) internal-time-units-per-second)
+				 expire)))))
+      (remhash key cache)
+      (setf cur nil))
     (cond (cur cur)
 	  (create
 	   (setf (gethash key cache) (make-domain-cache-entry))))))
@@ -463,6 +468,45 @@
   (with-slots (name ttl) record
     (let ((entry (domain-cache-get-entry cache name record t)))
       (push record (domain-cache-entry-records entry)))))
+
+(defun dns-cache-records (cache records)
+  (loop (unless records (return))
+     (let* ((key (domain-cache-key-rr (car records)))
+	    (matching (remove key records :test-not 'equal :key #'domain-cache-key-rr))
+	    (ttl (block no-expire
+		   (+ (/ (get-internal-real-time) internal-time-units-per-second)
+		      (apply 'min (mapcar #'(lambda (rr)
+					      (with-slots (ttl) rr
+						(if ttl ttl (return-from no-expire nil))))
+					  matching)))))
+	    (entry (make-domain-cache-entry :expire ttl :records matching)))
+       (setf (gethash key cache) entry
+	     records (set-difference records matching)))))
+
+(defun dns-cache-response (cache packet)
+  (let ((records (append (dns-packet-answers packet)
+			 (dns-packet-authority packet)
+			 (dns-packet-additional packet))))
+    (flet ((on-root (rr)
+	     (equal (slot-value rr 'name) '())))
+      (when (some #'on-root records)
+	(warn "DNS packet purports to contain RRs on the root zone.")
+	(setf records (delete-if #'on-root records))))
+    (when (dns-packet-authoritative packet)
+      (dolist (rq (dns-packet-queries packet))
+	(with-slots (name type) rq
+	  (unless (equal name '())
+	    (let ((key (domain-cache-key name type)))
+	      (unless (find key records :test 'equal :key #'domain-cache-key-rr)
+		(let ((entry (domain-cache-get-entry cache name type :clear)))
+		  (setf (domain-cache-entry-expire entry)
+			(+ (/ (get-internal-real-time) internal-time-units-per-second)
+			   60)))))))))	; XXX: Or something. It needs
+					; to last for the query in
+					; progress, at least. One
+					; should probably look at an
+					; SOA RR, if there is one.
+    (dns-cache-records cache records)))
 
 (defun make-domain-cache ()
   (let ((table (make-hash-table :test 'equal)))
@@ -483,6 +527,12 @@
 			("m.root-servers.net" ,(ipv4 "202.12.27.33")))))
       (let ((parsed (parse-domain-name (first server))))
 	(domain-cache-put table (make-instance 'ns-record :name '() :ttl nil :ns-name parsed))
+	;; Ensure that the cache is initialized at least with empty
+	;; lists, so that the resolver doesn't try to resolve the root
+	;; servers.
+	(domain-cache-get-entry table parsed 'a-record t)
+	(domain-cache-get-entry table parsed 'aaaa-record t)
+	
 	(dolist (address (cdr server))
 	  (domain-cache-put table (etypecase address
 				    (ipv4-host-address (make-instance 'a-record :name parsed :ttl nil :address address)))))))
@@ -532,9 +582,9 @@
 		 cfg))))
   #-unix nil)
 
-(defvar *resolver-config* (initialize-default-resolver))
+(defvar *dns-resolver-config* (initialize-default-resolver))
 
-
+(defgeneric dns-server-address-for-record (record))
 
 ;;; Misc.
 
