@@ -429,7 +429,13 @@
 
 (defmethod connected-address-p ((address tcp-address)) t)
 
-(export '(tcp-address tcp4-address tcp6-address))
+(defun tcp-address-for (host-address port)
+  (check-type port (unsigned-byte 16))
+  (etypecase host-address
+    (ipv4-address (make-instance 'tcp4-address :host-address host-address :port port))
+    (ipv6-address (make-instance 'tcp6-address :host-address host-address :port port))))
+
+(export '(tcp-address tcp4-address tcp6-address tcp-address-for))
 
 ;;; UDP code
 
@@ -439,7 +445,13 @@
 
 (defmethod connected-address-p ((address tcp-address)) nil)
 
-(export '(udp-address udp4-address udp6-address))
+(defun udp-address-for (host-address port)
+  (check-type port (unsigned-byte 16))
+  (etypecase host-address
+    (ipv4-address (make-instance 'udp4-address :host-address host-address :port port))
+    (ipv6-address (make-instance 'udp6-address :host-address host-address :port port))))
+
+(export '(udp-address udp4-address udp6-address udp-address-for))
 
 ;;; Unix sockets
 
