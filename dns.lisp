@@ -39,7 +39,8 @@
     `(progn
        (defclass ,name (resource-record) ,slot-desc)
        (setf *rr-coding-types* (cons '(,name (,class ,type) ,format)
-				     (remove ',name *rr-coding-types* :key #'car))))))
+				     (remove ',name *rr-coding-types* :key #'car)))
+       (export '(,name)))))
 
 (define-rr-type a-record #x1 #x1
 		((address ipv4-address)))
@@ -68,6 +69,8 @@
 		 (weigth uint-16)
 		 (port uint-16)
 		 (host-name domain-name)))
+
+(export '(resource-record))
 
 ;;; Packet decoding logic
 
@@ -712,6 +715,8 @@
 			  (when (do-request (dns-server-address-for-record record))
 			    (return-from found-server))))))
 		  (check-cache))))))))
+
+(export '(*dns-resolver-config*))
 
 ;;; Misc.
 
