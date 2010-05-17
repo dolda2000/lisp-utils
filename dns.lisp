@@ -137,7 +137,7 @@
 			       (decoded (append (list label) (decode-label))))
 			  (push (cons orig-off decoded) (slot-value buf 'prev-names))
 			  decoded))))
-		 ((3) (let* ((offset (+ (* 256 (ldb (byte 0 6) len))
+		 ((3) (let* ((offset (+ (* 256 (ldb (byte 6 0) len))
 					(decode-uint-8 buf)))
 			     (prev (assoc offset (dns-decode-state-prev-names buf))))
 			(unless prev
