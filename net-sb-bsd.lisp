@@ -52,13 +52,13 @@
     (udp4-address
      '(sb-bsd-sockets:inet-socket :type :datagram))
     (ipv6-address
-     (error "SBCL does not support IPv6."))
+     (simple-network-error "SBCL does not support IPv6."))
     (inet-host-address
-     (error "SBCL does not support raw sockets."))
+     (simple-network-error "SBCL does not support raw sockets."))
     (local-stream-address
      '(sb-bsd-sockets:local-socket :type :stream))
     (local-seq-address
-     (error "SBCL does not support Unix seqpacket sockets."))
+     (simple-network-error "SBCL does not support Unix seqpacket sockets."))
     (local-datagram-address
      '(sb-bsd-sockets:local-socket :type :datagram))))
 
@@ -137,7 +137,7 @@
 (defmethod socket-send-to ((socket sbcl-socket) buf destination &key (start 0) (end (length buf)) from no-hang)
   (check-not-closed socket)
   (when from
-    (error "SB-BSD-THREADS does not support specifying the source address of individual packets."))
+    (simple-network-error "SB-BSD-THREADS does not support specifying the source address of individual packets."))
   (let ((result (map-sb-bsd-errors (socket)
 		  (retry-loop ("Retry the send operation.")
 		    (sb-bsd-sockets:socket-send (slot-value socket 'sb-socket)

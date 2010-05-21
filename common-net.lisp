@@ -107,6 +107,11 @@
 
 (define-condition network-error (error) ())
 
+(define-condition simple-network-error (network-error simple-error) ())
+
+(defun simple-network-error (format &rest args)
+  (error 'simple-network-error :format-control format :format-arguments args))
+
 (define-condition socket-error (socket-condition network-error) ())
 
 (define-condition address-busy (network-error)
