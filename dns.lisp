@@ -79,7 +79,7 @@
   (pos 0 :type (mod 65536))
   (prev-names '() :type list))
 
-(define-condition dns-error (error) ())
+(define-condition dns-error (network-error) ())
 (define-condition dns-decode-error (dns-error)
   ((packet :initarg :packet)))
 (define-condition simple-dns-decode-error (dns-decode-error simple-error) ())
@@ -292,7 +292,7 @@
 			  (push (cons name (length packet-buf)) prev-names))
 			(let ((encoded (charcode:encode-string (car name) :ascii)))
 			  (unless (< (length encoded) 64)
-			    (error "DNS labels cannot exceed 63 octets in length: ~S" (car name)))
+			    (simple-dns-decode-error buf "DNS labels cannot exceed 63 octets in length: ~S" (car name)))
 			  (encode-uint-8 buf (length encoded))
 			  (encode-bytes buf encoded))
 			(encode-label (cdr name)))))))
@@ -328,7 +328,7 @@
 				      (string (charcode:encode-string val :ascii))
 				      ((array (unsigned-byte 8)) val))))
 			  (unless (< (length data) 256)
-			    (error "DNS text data length cannot exceed 255 octets."))
+			    (simple-dns-decode-error buf "DNS text data length cannot exceed 255 octets."))
 			  (encode-uint-8 buf (length data))
 			  (encode-bytes buf data)))
 		((ipv4-address)
@@ -680,7 +680,7 @@
 		       (error 'dns-name-error :query-name (unparse-domain-name name) :query-type types
 			      :config config))
 		     (eq resp-code :success)))
-	       (name-server-timeout () nil))))
+	       (network-error () nil))))
       (check-cache)
       (signal 'dns-resolver-help :query-name (unparse-domain-name name) :query-type types
 	      :config config)
