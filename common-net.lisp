@@ -461,13 +461,14 @@
 ;;; Unix sockets
 
 (defclass local-address (address)
-  ((path :type pathname)))
+  ((path :type (or pathname nil))))
 
 (defmethod initialize-instance :after ((instance local-address) &key path)
-  (setf (slot-value instance 'path) (pathname path)))
+  (setf (slot-value instance 'path) (and path (pathname path))))
 
 (defmethod format-address ((address local-address))
-  (namestring (slot-value address 'path)))
+  (let ((path (slot-value address 'path)))
+    (and path (namestring path))))
 
 (defclass local-stream-address (local-address) ())
 (defclass local-seq-address (local-address) ())

@@ -5,6 +5,11 @@
 (defclass sbcl-listen-socket (listen-socket sbcl-socket) ())
 (defclass sbcl-stream-socket (stream-socket sbcl-socket) ())
 (defclass sbcl-datagram-socket (datagram-socket sbcl-socket) ())
+(defclass sbcl-unix-socket (sbcl-socket)
+  ((unlink-name :type (or pathname nil) :initform nil)))
+(defclass sbcl-unix-listen-socket (sbcl-listen-socket sbcl-unix-socket) ())
+(defclass sbcl-unix-stream-socket (sbcl-stream-socket sbcl-unix-socket) ())
+(defclass sbcl-unix-datagram-socket (sbcl-datagramx-socket sbcl-unix-socket) ())
 
 (defmacro with-sb-socket ((var socket) &body body)
   (let ((success (gensym "SUCCESS")))
@@ -71,13 +76,15 @@
     (error 'socket-closed :socket socket)))
 
 (defgeneric socket-class-for-address (address mode))
-(defmethod socket-class-for-address ((address tcp-address) (mode (eql :connect))) 'sbcl-stream-socket)
+(defmethod socket-class-for-address ((address tcp-address) mode) 'sbcl-stream-socket)
 (defmethod socket-class-for-address ((address tcp-address) (mode (eql :bind))) 'sbcl-listen-socket)
 (defmethod socket-class-for-address ((address udp-address) mode) 'sbcl-datagram-socket)
 (defmethod socket-class-for-address ((address inet-host-address) mode) 'sbcl-datagram-socket)
-(defmethod socket-class-for-address ((address local-stream-address) mode) 'sbcl-stream-socket)
-(defmethod socket-class-for-address ((address local-seq-address) mode) 'sbcl-datagram-socket)
-(defmethod socket-class-for-address ((address local-datagram-address) mode) 'sbcl-datagram-socket)
+(defmethod socket-class-for-address ((address local-stream-address) mode) 'sbcl-unix-stream-socket)
+(defmethod socket-class-for-address ((address local-stream-address) (mode (eql :bind))) 'sbcl-unix-listen-socket)
+(defmethod socket-class-for-address ((address local-seq-address) mode) 'sbcl-unix-datagram-socket)
+(defmethod socket-class-for-address ((address local-seq-address) (mode (eql :bind))) 'sbcl-unix-listen-socket)
+(defmethod socket-class-for-address ((address local-datagram-address) mode) 'sbcl-unix-datagram-socket)
 
 (define-condition wrapped-socket-error (error socket-condition)
   ((cause :initarg :cause))
@@ -137,7 +144,7 @@
 (defmethod socket-send-to ((socket sbcl-socket) buf destination &key (start 0) (end (length buf)) from no-hang)
   (check-not-closed socket)
   (when from
-    (simple-network-error "SB-BSD-THREADS does not support specifying the source address of individual packets."))
+    (simple-network-error "SB-BSD-SOCKETS does not support specifying the source address of individual packets."))
   (let ((result (map-sb-bsd-errors (socket)
 		  (retry-loop ("Retry the send operation.")
 		    (sb-bsd-sockets:socket-send (slot-value socket 'sb-socket)
@@ -207,11 +214,33 @@
 				  (apply #'sb-bsd-sockets:socket-connect sk (map-address-to-sbcl sk remote))))
 			      sk)))
 
+(defmethod bind-to-address :around ((address local-address))
+  (let ((ret (call-next-method)))
+    (when (typep ret 'sbcl-unix-socket)
+      (setf (slot-value ret 'unlink-name) (slot-value address 'path)))
+    ret))
+
+(defmethod connect-to-address :around ((remote local-address) &key local)
+  (let ((ret (call-next-method)))
+    (when (and (typep ret 'sbcl-unix-socket) (typep local 'local-address))
+      (setf (slot-value ret 'unlink-name) (slot-value local 'path)))
+    ret))
+
 (defmethod accept ((socket sbcl-listen-socket))
   (check-not-closed socket)
   (let* ((ret-list (multiple-value-list (sb-bsd-sockets:socket-accept (slot-value socket 'sb-socket))))
 	 (sk (first ret-list))
 	 (addr-list (rest ret-list)))
     (with-sb-socket (sk sk)
-      (values (make-instance 'sbcl-stream-socket :sb-socket sk)
+      (values (make-instance 'sbcl-stream-socket
+			     ;; XXX: Should be
+			     ;; (socket-class-for-address (map-sbcl-to-address sk (multiple-value-list (sb-bsd-sockets:socket-name sk))) :accept)
+			     ;; but ECL does not support socket-name for Unix sockets.
+			     :sb-socket sk)
 	      (map-sbcl-to-address sk addr-list)))))
+
+(defmethod close-socket :after ((socket sbcl-unix-socket))
+  (with-slots (unlink-name) socket
+    (when unlink-name
+      (delete-file unlink-name)
+      (setf unlink-name nil))))

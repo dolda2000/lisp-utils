@@ -71,3 +71,8 @@
 
 (defmethod gray:stream-write-sequence ((socket stream-socket) seq &optional (start 0) (end (length seq)))
   (gray-stream-write-sequence socket seq start end))
+
+;;; Error cover-up
+
+(defmethod sb-bsd-sockets:socket-name ((sk sb-bsd-sockets:local-socket))
+  (simple-network-error "ECL does not support reading the name of Unix sockets."))
